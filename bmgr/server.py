@@ -1,5 +1,5 @@
 from flask import (
-  Flask, Blueprint, jsonify, make_response, abort, request, g, current_app
+  Blueprint, jsonify, make_response, abort, g, current_app
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import joinedload, relationship, synonym, validates
@@ -7,11 +7,10 @@ from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import UniqueConstraint, and_
 from flask_expects_json import expects_json
-from ClusterShell import NodeSet
 from ClusterShell.NodeSet import NodeSet as nodeset
+from jinja2 import Environment, FileSystemLoader
 
-import subprocess, tempfile, os, stat, flask, json, jinja2, sys, itertools, time
-import re
+import json, jinja2, sys, itertools, pathlib, re, importlib
 
 MAX_NODESET = 100000
 
@@ -25,12 +24,57 @@ host_profiles_table = db.Table('host_profiles',
                                          db.ForeignKey('profiles.id'))
                                )
 
+# Declare jinja_env as Global in order to gain performances (also take benefit of default jinja2 memory cache)
+jinja_env: Environment
+
+def load_jinja_customs(path):
+  """
+  Load jinja2 customs filters anf globals from directory path
+  """
+  filters = {}
+  globals_ = {}
+
+  base = pathlib.Path(path)
+  if not base.exists():
+    return filters, globals_
+
+  for file in base.glob("*.py"):
+    if file.name.startswith("_"):
+      continue
+
+    spec = importlib.util.spec_from_file_location(file.stem, file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    if hasattr(module, "FILTERS"):
+      filters.update(module.FILTERS)
+
+    if hasattr(module, "GLOBALS"):
+      globals_.update(module.GLOBALS)
+
+  return filters, globals_
+
+def create_jinja_env(template_path, jinja_customs_path, enable_recursive_rendering=False):
+  """Create jinja Env"""
+  global jinja_env
+
+  jinja_env = Environment(
+    loader=FileSystemLoader(template_path)
+  )
+
+  # Load jinja2 customs filters and globals
+  filters, globals_ = load_jinja_customs(jinja_customs_path)
+  jinja_env.filters.update(filters)
+  jinja_env.globals.update(globals_)
+
+  jinja_env.enable_recursive_rendering = enable_recursive_rendering
+
 class Profile(db.Model):
   __tablename__ = 'profiles'
   id = db.Column(db.Integer, primary_key=True)
   name = db.Column(db.String(255), unique=True)
   weight = db.Column(db.Integer, default=0)
-  _attributes = db.Column('attributes', db.String(8000))
+  _attributes = db.Column('attributes', db.String())
 
   @property
   def attributes(self):
@@ -42,13 +86,15 @@ class Profile(db.Model):
 
   attributes = synonym('_attributes', descriptor=attributes)
 
-  def __init__(self, name, attributes={}, weight=0):
+  def __init__(self, name, attributes=None, weight=0):
+      if attributes is None:
+          attributes = {}
       self.name = name
       self._attributes = json.dumps(attributes)
       self.weight = weight
 
   def __repr__(self):
-      return '<Profile %r>' % (self.name)
+      return '<Profile %r>' % self.name
 
   def to_dict(self):
     return {'name': self.name,
@@ -88,7 +134,7 @@ class Host(db.Model):
     self.hostname = hostname
 
   def __repr__(self):
-    return '<Host %r>' % (self.hostname)
+    return '<Host %r>' % self.hostname
 
   @property
   def attributes(self):
@@ -129,7 +175,7 @@ class Resource(db.Model):
     self.template_uri = template_uri
 
   def __repr__(self):
-      return '<Resource %r>' % (self.name)
+      return '<Resource %r>' % self.name
 
   def to_dict(self):
     return {'name': self.name,
@@ -158,7 +204,7 @@ class Alias(db.Model):
     self.autodelete = autodelete
 
   def __repr__(self):
-    return '<Alias %r>' % (self.name)
+    return '<Alias %r>' % self.name
 
 @bp.errorhandler(404)
 def not_found(error):
@@ -172,23 +218,30 @@ def unauthorized(error):
 def conflict(error):
   return make_response(jsonify({'error': 'Conflict'}), 409)
 
-def init_db():
+def init_db(data):
   db.create_all()
 
-  normal_boot = Resource('ipxe_normal_boot', 'file://disk_boot.ipxe.jinja')
-  deploy_boot = Resource('ipxe_deploy_boot', 'file://deploy_boot.ipxe.jinja')
-  boot_alias = Alias('ipxe_boot', normal_boot, None)
-  kickstart = Resource('kickstart', 'file://ks_rhel7.jinja')
-  poap = Resource('poap_config', 'file://poap_config.jinja')
-  db.session.add(normal_boot)
-  db.session.add(deploy_boot)
-  db.session.add(boot_alias)
-  db.session.add(kickstart)
-  db.session.add(poap)
+  if not data:
+    return
+
+  resources = [e for e in data if e.get("type") == "resource"]
+  aliases = [e for e in data if e.get("type") == "alias"]
+
+  # Create firstly resources as aliases depend on them if not exist
+  for res in resources:
+    if get_resource(res.get('name'), True) is None:
+      db.session.add(Resource(res.get('name'), res.get('template_uri')))
+
+  # Create next aliases if not exist
+  for alias in aliases:
+    r = get_resource(alias.get('target'))
+    if get_alias(alias.get('name'), None, True) is None:
+      db.session.add(Alias(alias.get('name'), r, None))
+
   db.session.commit()
 
-
 def get_profile(profile_name):
+  p = None
   try:
     p = db.session.query(Profile).filter_by(name=profile_name).one()
   except NoResultFound:
@@ -196,11 +249,15 @@ def get_profile(profile_name):
 
   return p
 
-def get_resource(resource_name):
+def get_resource(resource_name, allow_fail=False):
+  r = None
   try:
     r = db.session.query(Resource).filter_by(name=resource_name).one()
   except NoResultFound:
-    json_abort(404, "Resource '{}' not found".format(resource_name))
+    if allow_fail:
+      return None
+    else:
+      json_abort(404, "Resource '{}' not found".format(resource_name))
 
   return r
 
@@ -221,16 +278,25 @@ def get_alias(alias_name, hostname=None, allow_fail=False):
 
 def render(tpl, context):
   path = parse_template_uri(tpl)
-  return jinja2.Environment(loader = jinja2.FileSystemLoader(
-      current_app.config['BMGR_TEMPLATE_PATH'])).get_template(path).render(
-    context)
+
+  if jinja_env.enable_recursive_rendering:
+    # Maximum recursive depth
+    max_depth = 3
+    prev = jinja_env.get_template(path).render(context)
+    for depth in range(max_depth):
+      curr = jinja_env.from_string(prev).render(context)
+      if curr == prev:
+        return curr
+      prev = curr
+
+  return jinja_env.get_template(path).render(context)
 
 def delete_profile(name):
   p = get_profile(name)
   db.session.delete(p)
 
 def query_hosts(host_list=None, check_count=False):
-  hosts = db.session.query(Host).options(joinedload('profiles'))
+  hosts = db.session.query(Host).options(joinedload(Host.profiles))
 
   if host_list is not None:
       hosts = hosts.filter(Host.hostname.in_(host_list))
@@ -266,7 +332,7 @@ def get_hosts_folded(host_list=None):
         'profiles': [p.name for p in sorted(profiles)],
         'attributes': merge_profile_attributes(profiles)})
 
-  return sorted(folded_list, key = lambda g: g['profiles'])
+  return sorted(folded_list, key = lambda x: x['profiles'])
 
 def delete_hosts(host_list):
   db_hosts = query_hosts(host_list, check_count=True)
@@ -291,8 +357,7 @@ def get_host(hostname):
   'required': ['name']
 })
 def api_hosts_post():
-  db_hosts = []
-  t0 = time.time()
+  host_list = []
   try:
     host_list = nodeset(g.data['name'])
     if len(host_list) > MAX_NODESET:
@@ -307,9 +372,8 @@ def api_hosts_post():
         db.session.flush()
 
     db.session.commit()
-  except SQLAlchemyError:
-    # FIXME: Discriminate errors
-    json_abort(409, "Host already exists")
+  except SQLAlchemyError as e:
+    json_abort(409, str(e.__dict__['orig']))
 
   folded_hosts = get_hosts_folded(host_list)
   return jsonify(folded_hosts)
@@ -366,13 +430,13 @@ def api_hosts_hostname_get(hostname):
   'required': ['name']
 })
 def api_profiles_post():
+  profile = None
   try:
     profile = Profile.from_dict(g.data)
     db.session.add(profile)
     db.session.commit()
-  #FIXME: discriminate errors
-  except SQLAlchemyError:
-    json_abort(409, "Profile already exists")
+  except SQLAlchemyError as e:
+    json_abort(409, str(e.__dict__['orig']))
 
   return jsonify(profile.to_dict())
 
@@ -442,13 +506,13 @@ def api_resources_get():
   'required': ['name', 'template_uri']
 })
 def api_resources_post():
+  resource = None
   try:
     resource = Resource.from_dict(g.data)
     db.session.add(resource)
     db.session.commit()
-  #FIXME: discriminate errors
-  except SQLAlchemyError:
-    json_abort(409, "Resource already exists")
+  except SQLAlchemyError as e:
+    json_abort(409, str(e.__dict__['orig']))
 
   return jsonify(resource.to_dict())
 
@@ -519,7 +583,6 @@ def api_resources_resource_render(name, hostname):
   'required': ['name', 'target']
 })
 def api_aliases_post():
-  exists = query_aliases(g.data['name'])
   if query_aliases(g.data['name']).count() > 0:
     json_abort(409, "Alias already exists")
 
@@ -543,10 +606,10 @@ def api_aliases_post():
   'required': ['hosts', 'target']
 })
 def api_aliases_alias_post(name):
-  exists = query_aliases(name)
+  query_aliases(name)
 
   # Check if the main alias is defined
-  main_alias = get_alias(name)
+  get_alias(name)
 
   if query_aliases(name, nodeset(g.data['hosts'])).count() > 0:
     json_abort(409, "Alias or override already exists")
@@ -632,4 +695,5 @@ def api_aliases_alias_get(name):
 
 if __name__ == "__main__":
   if sys.argv[1] == 'initdb':
-    init_db()
+    init_data = current_app.config.get("BMGR_INIT_DATA", [])
+    init_db(init_data)

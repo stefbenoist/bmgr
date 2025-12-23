@@ -52,8 +52,8 @@ setup(name= 'bmgr', version= '0.7.0', description= 'Simple iPXE boot manager',
       long_description= 'Simple tool to manage PXE boot requests with a RESTful'
       ' interface',
       author= 'Francois Diakhate', author_email= 'francois.diakhate@cea.fr',
-      license= "GPLv3", package_dir={'bmgr': 'bmgr', 'bmgr.scripts': 'bmgr/scripts'},
-      packages=['bmgr','bmgr.scripts'],
+      license= "GPLv3", package_dir={'bmgr': 'bmgr', 'bmgr.scripts': 'bmgr/scripts', 'bmgr.customs': 'bmgr/customs'},
+      packages=['bmgr','bmgr.scripts','bmgr.customs'],
       data_files=[],
       entry_points= '''
         [console_scripts]

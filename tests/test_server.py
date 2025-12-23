@@ -15,7 +15,16 @@ def client():
     client_config = {
        'BMGR_DB_URI': 'sqlite:///{0}'.format(db_path),
        'TESTING': True,
-       'BMGR_TEMPLATE_PATH': template_path
+       'BMGR_TEMPLATE_PATH': template_path,
+       'BMGR_JINJA_CUSTOMS_PACKAGE_PATH': '../bmgr/customs',
+       'BMGR_ENABLE_RECURSIVE_RENDERING': True,
+       'BMGR_INIT_DATA': [
+         {"type": "resource", "name": "ipxe_normal_boot", "template_uri": "file://disk_boot.ipxe.jinja"},
+         {"type": "resource", "name": "ipxe_deploy_boot", "template_uri": "file://deploy_boot.ipxe.jinja"},
+         {"type": "resource", "name": "kickstart", "template_uri": "file://ks_rhel7.jinja"},
+         {"type": "resource", "name": "poap_config", "template_uri": "file://poap_config.jinja"},
+         {"type": "alias", "name": "ipxe_boot", "target": "ipxe_normal_boot"}
+        ]
        #'SQLALCHEMY_ECHO': True
        }
 
@@ -23,8 +32,10 @@ def client():
     client = app.test_client()
 
     app.testing = True
-    with app.app_context():
-        bmgr.server.init_db()
+    # init_db must be idempotent
+    for n in range(2):
+        with app.app_context():
+            bmgr.server.init_db(app.config.get("BMGR_INIT_DATA", []))
 
     with open(os.path.join(template_path, 'boot.jinja'), 'w+') as f:
         f.write('boot: a: {{ a }} b: {{ b }}')
@@ -35,6 +46,43 @@ def client():
     with open(os.path.join(template_path, 'defined.jinja'), 'w+') as f:
         f.write('{{ c + 2 }}')
 
+    # Test template with from_json filter
+    template_from_json = """\
+        {%- set data = \'{"foo": 123}\' | from_json -%}
+        {{- data.foo -}}
+    """
+    with open(os.path.join(template_path, 'from_json.jinja'), 'w+') as f:
+        f.write(template_from_json)
+
+    # Test template with from_yaml filter
+    template_from_yaml = """\
+        {%- set config = "foo: 123\\nbar: 456" | from_yaml -%}
+        {{- config.bar -}}
+    """
+    with open(os.path.join(template_path, 'from_yaml.jinja'), 'w+') as f:
+        f.write(template_from_yaml)
+
+    # Test template with regex_replace filter
+    template_regex_replace = """\
+        {%- set text = "Hello 123" -%}
+        {{- text | regex_replace("\d+", "world") -}}
+    """
+    with open(os.path.join(template_path, 'regex_replace.jinja'), 'w+') as f:
+        f.write(template_regex_replace)
+
+    # Test template with recursive rendering
+    with open(os.path.join(template_path, 'recursive.jinja'), 'w+') as f:
+        f.write('Hello {{ pseudo }}')
+
+    # Test template with __boot_context__() usage
+    template_boot_context = """\
+        {%- for key, value in __boot_context__().items() if key.startswith('boot_') and value.strip() | length > 0 -%}
+        {{- value.strip() -}}
+        {%- endfor -%}
+        """
+
+    with open(os.path.join(template_path, 'boot_context.jinja'), 'w+') as f:
+        f.write(template_boot_context)
 
     yield client
 
@@ -52,6 +100,10 @@ def assert_empty_profiles(client):
     assert r.status_code == 200
     assert r.get_json() == []
 
+def test_health_check(client):
+    r = client.get('/health')
+    assert r.status_code == 200
+    assert r.get_json() == {'status': 'passing'}
 
 def test_hosts(client):
     assert_empty_hosts(client)
@@ -191,7 +243,7 @@ def test_host_profiles(client):
 
         assert r.status_code == 200
 
-    # Create hosts with non existing profiles
+    # Create hosts with non-existing profiles
     r = client.post('/api/v1.0/hosts',
                     json = { 'name': 'node[0-9]' ,
                              'profiles': ['profileA', 'profileC']}
@@ -214,7 +266,7 @@ def test_host_profiles(client):
         'profiles': ['profileA'],
         'attributes': {'a': '1'}}]
 
-    # Update profiles for non existing host
+    # Update profiles for non-existing host
     r = client.patch('/api/v1.0/hosts/node20',
                     json = {'profiles': ['profileA', 'profileB']})
     assert r.status_code == 404
@@ -311,7 +363,8 @@ def test_resources(client):
 
     # Create some profiles
     profiles = [ {"name": "profileA",
-                  "attributes": {"a": "1", "b": "1"},
+                  "attributes": {"a": "1", "b": "1", "pseudo": "{{ name }}", "name": "john",
+                                 "boot_1": "a", "boot_2": "b", "boot_3": "c"},
                  "weight": 10},
                  {"name": "profileB",
                   "attributes": {"b": "2"}
@@ -334,14 +387,59 @@ def test_resources(client):
     r = client.post('/api/v1.0/resources',
                     json = {'name': 'boot',
                     'template_uri': 'file://boot.jinja'})
+    assert r.status_code == 200
 
     r = client.post('/api/v1.0/resources',
                     json = {'name': 'deploy',
                     'template_uri': 'file://deploy.jinja'})
+    assert r.status_code == 200
 
     r = client.get('/api/v1.0/resources/boot/node0')
     assert r.status_code == 200
     assert r.get_data(as_text=True) == 'boot: a: 1 b: 1'
+
+    # Tests filters
+    client.post('/api/v1.0/resources',
+                json = {'name': 'from_json',
+                'template_uri': 'file://from_json.jinja'})
+
+    r = client.get('/api/v1.0/resources/from_json/node0')
+    assert r.status_code == 200
+    assert r.get_data(as_text=True) == '123'
+
+    client.post('/api/v1.0/resources',
+                json = {'name': 'from_yaml',
+                'template_uri': 'file://from_yaml.jinja'})
+
+    r = client.get('/api/v1.0/resources/from_yaml/node0')
+    assert r.status_code == 200
+    assert r.get_data(as_text=True) == '456'
+
+    client.post('/api/v1.0/resources',
+                json = {'name': 'regex_replace',
+                'template_uri': 'file://regex_replace.jinja'})
+
+    r = client.get('/api/v1.0/resources/regex_replace/node0')
+    assert r.status_code == 200
+    assert r.get_data(as_text=True) == 'Hello world'
+
+    # Test recursive rendering
+    client.post('/api/v1.0/resources',
+                json = {'name': 'recursive',
+                'template_uri': 'file://recursive.jinja'})
+
+    r = client.get('/api/v1.0/resources/recursive/node0')
+    assert r.status_code == 200
+    assert r.get_data(as_text=True) == 'Hello john'
+
+    # Test boot_context rendering
+    client.post('/api/v1.0/resources',
+                json = {'name': 'boot_context',
+                'template_uri': 'file://boot_context.jinja'})
+
+    r = client.get('/api/v1.0/resources/boot_context/node0')
+    assert r.status_code == 200
+    assert r.get_data(as_text=True) == 'abc'
 
     # Add a second profile
     r = client.patch('/api/v1.0/hosts/node0',
@@ -387,6 +485,7 @@ def test_resources(client):
     r = client.patch('/api/v1.0/resources/boot',
                     json = {'name': 'boot',
                     'template_uri': 'file://bad.jinja'})
+    assert r.status_code == 200
 
     r = client.get('/api/v1.0/resources/boot/node0')
     assert r.status_code == 400
@@ -423,10 +522,12 @@ def test_aliases(client):
     r = client.post('/api/v1.0/resources',
                     json = {'name': 'boot',
                     'template_uri': 'file://boot.jinja'})
+    assert r.status_code == 200
 
     r = client.post('/api/v1.0/resources',
                     json = {'name': 'deploy',
                     'template_uri': 'file://deploy.jinja'})
+    assert r.status_code == 200
 
     r = client.post('/api/v1.0/aliases',
                     json={'name': 'myalias',
