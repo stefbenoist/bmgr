@@ -38,11 +38,12 @@ def load_jinja_customs(path):
   if not base.exists():
     return filters, globals_
 
-  for file in base.glob("*.py"):
+  for file in base.rglob("*.py"):
     if file.name.startswith("_"):
       continue
 
-    spec = importlib.util.spec_from_file_location(file.stem, file)
+    module_name = f"bmgr_jinja_ext_{file.relative_to(base).with_suffix('').as_posix().replace('/', '_')}"
+    spec = importlib.util.spec_from_file_location(module_name, file)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 

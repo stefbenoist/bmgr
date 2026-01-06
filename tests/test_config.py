@@ -3,6 +3,7 @@ import pytest
 from flask import Flask
 
 from bmgr import get_int_param, get_bool_param
+from bmgr.server import load_jinja_customs
 
 @pytest.fixture
 def app():
@@ -42,3 +43,26 @@ def test_get_bool_param_with_default(app, monkeypatch):
     app.config.pop("TEST_BOOL_PARAM", None)
 
     assert get_bool_param(app, "TEST_BOOL_PARAM", False) == False
+
+def test_load_filters_from_subdirectory(tmp_path):
+    # create customs subdirectory structure
+    base = tmp_path / "customs"
+    sub = base / "additional"
+    sub.mkdir(parents=True)
+
+    filters_py = sub / "filters.py"
+    filters_py.write_text(
+        """
+def upper(value):
+    return value.upper()
+
+FILTERS = {
+    "upper": upper,
+}
+"""
+    )
+
+    filters, globals_ = load_jinja_customs(base)
+
+    assert "upper" in filters
+    assert filters["upper"]("hello") == "HELLO"
