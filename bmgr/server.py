@@ -1,11 +1,11 @@
 from flask import (
-  Blueprint, jsonify, make_response, abort, g, current_app
+  Blueprint, jsonify, make_response, abort, g, current_app, request
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import joinedload, relationship, synonym, validates
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import UniqueConstraint, and_
+from sqlalchemy import UniqueConstraint, and_, event, update
 from flask_expects_json import expects_json
 from ClusterShell.NodeSet import NodeSet as nodeset
 from jinja2 import Environment, FileSystemLoader
@@ -38,11 +38,12 @@ def load_jinja_customs(path):
   if not base.exists():
     return filters, globals_
 
-  for file in base.glob("*.py"):
+  for file in base.rglob("*.py"):
     if file.name.startswith("_"):
       continue
 
-    spec = importlib.util.spec_from_file_location(file.stem, file)
+    module_name = f"bmgr_jinja_ext_{file.relative_to(base).with_suffix('').as_posix().replace('/', '_')}"
+    spec = importlib.util.spec_from_file_location(module_name, file)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
@@ -69,8 +70,47 @@ def create_jinja_env(template_path, jinja_customs_path, enable_recursive_renderi
 
   jinja_env.enable_recursive_rendering = enable_recursive_rendering
 
+class CollectionMeta(db.Model):
+  """
+  Class used for incrementing revision for Etag handling
+  """
+  __tablename__ = "collections_meta"
+
+  name = db.Column(db.String(255), primary_key=True)
+  revision = db.Column(db.Integer, nullable=False, default=1)
+
+@event.listens_for(db.session, 'after_flush')
+def bump_collection_revisions(session, flush_context):
+  """
+  Bump revision for all collections impacted by Write operations
+  """
+  collections = set()
+
+  # INSERT / UPDATE operations
+  for obj in session.new.union(session.dirty):
+      name = getattr(obj.__class__, '__collection_name__', None)
+      if name:
+          collections.add(name)
+
+  # DELETE operations
+  for obj in session.deleted:
+      name = getattr(obj.__class__, '__collection_name__', None)
+      if name:
+          collections.add(name)
+
+  if not collections:
+      return
+
+  for name in collections:
+    session.execute(
+        update(CollectionMeta)
+        .where(CollectionMeta.name == name)
+        .values(revision=CollectionMeta.revision + 1)
+    )
+
 class Profile(db.Model):
   __tablename__ = 'profiles'
+  __collection_name__ = 'profiles'
   id = db.Column(db.Integer, primary_key=True)
   name = db.Column(db.String(255), unique=True)
   weight = db.Column(db.Integer, default=0)
@@ -122,6 +162,7 @@ def parse_template_uri(uri):
 
 class Host(db.Model):
   __tablename__ = 'hosts'
+  __collection_name__ = 'hosts'
   id = db.Column(db.Integer, primary_key=True)
   hostname = db.Column(db.String(255), unique=True)
 
@@ -221,6 +262,11 @@ def conflict(error):
 def init_db(data):
   db.create_all()
 
+  # Init revisions values
+  for name in ['hosts', 'profiles']:
+    if not db.session.query(CollectionMeta).filter_by(name=name).first():
+      db.session.add(CollectionMeta(name=name, revision=1))
+
   if not data:
     return
 
@@ -263,7 +309,7 @@ def get_resource(resource_name, allow_fail=False):
 
 def get_alias(alias_name, hostname=None, allow_fail=False):
   try:
-    a= db.session.query(Alias)
+    a = db.session.query(Alias)
     if hostname:
       return a.join(Host).filter(and_(Alias.name==alias_name,
                                       Host.hostname==hostname)).one()
@@ -380,7 +426,19 @@ def api_hosts_post():
 
 @bp.route('/api/v1.0/hosts', methods=['GET'])
 def api_hosts_get():
-  return jsonify(get_hosts_folded())
+  # Get revision
+  meta = db.session.get(CollectionMeta, 'hosts')
+  etag = f"hosts:rev{meta.revision}"
+
+  # return Status Not Modified (304) if Entity tag matches
+  if request.if_none_match.contains_weak(etag):
+    return "", 304
+
+  response = make_response(jsonify(get_hosts_folded()))
+  response.headers["ETag"] = f'W/"{etag}"'
+  response.headers["Cache-Control"] = "private, must-revalidate"
+
+  return response
 
 @bp.route('/api/v1.0/hosts/<string:hostname>', methods=['DELETE'])
 def api_hosts_hostname_delete(hostname):
@@ -442,12 +500,24 @@ def api_profiles_post():
 
 @bp.route('/api/v1.0/profiles', methods=['GET'])
 def api_profiles_get():
+  # Get revision
+  meta = db.session.get(CollectionMeta, 'profiles')
+  etag = f"profiles:rev{meta.revision}"
+
+  # return Status Not Modified (304) if Entity tag matches
+  if request.if_none_match.contains_weak(etag):
+    return "", 304
+
   profiles = db.session.query(Profile).all()
   r = []
   for p in profiles:
     r.append(p.to_dict())
 
-  return jsonify(r)
+  response = make_response(jsonify(r))
+  response.headers["ETag"] = f'W/"{etag}"'
+  response.headers["Cache-Control"] = "private, must-revalidate"
+
+  return response
 
 
 @bp.route('/api/v1.0/profiles/<string:name>', methods=['DELETE'])
