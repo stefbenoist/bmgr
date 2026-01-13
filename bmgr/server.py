@@ -88,18 +88,18 @@ def bump_collection_revisions(session, flush_context):
 
   # INSERT / UPDATE operations
   for obj in session.new.union(session.dirty):
-      name = getattr(obj.__class__, '__collection_name__', None)
-      if name:
-          collections.add(name)
+    name = getattr(obj.__class__, '__collection_name__', None)
+    if name:
+      collections.add(name)
 
   # DELETE operations
   for obj in session.deleted:
-      name = getattr(obj.__class__, '__collection_name__', None)
-      if name:
-          collections.add(name)
+    name = getattr(obj.__class__, '__collection_name__', None)
+    if name:
+      collections.add(name)
 
   if not collections:
-      return
+    return
 
   for name in collections:
     session.execute(
