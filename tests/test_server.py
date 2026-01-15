@@ -15,7 +15,14 @@ def client():
     client_config = {
        'BMGR_DB_URI': 'sqlite:///{0}'.format(db_path),
        'TESTING': True,
-       'BMGR_TEMPLATE_PATH': template_path
+       'BMGR_TEMPLATE_PATH': template_path,
+       'BMGR_INIT_DATA': [
+         {"type": "resource", "name": "ipxe_normal_boot", "template_uri": "file://disk_boot.ipxe.jinja"},
+         {"type": "resource", "name": "ipxe_deploy_boot", "template_uri": "file://deploy_boot.ipxe.jinja"},
+         {"type": "resource", "name": "kickstart", "template_uri": "file://ks_rhel7.jinja"},
+         {"type": "resource", "name": "poap_config", "template_uri": "file://poap_config.jinja"},
+         {"type": "alias", "name": "ipxe_boot", "target": "ipxe_normal_boot"}
+        ]
        #'SQLALCHEMY_ECHO': True
        }
 
@@ -23,8 +30,10 @@ def client():
     client = app.test_client()
 
     app.testing = True
-    with app.app_context():
-        bmgr.server.init_db()
+    # init_db must be idempotent
+    for n in range(2):
+        with app.app_context():
+            bmgr.server.init_db(app.config.get("BMGR_INIT_DATA", []))
 
     with open(os.path.join(template_path, 'boot.jinja'), 'w+') as f:
         f.write('boot: a: {{ a }} b: {{ b }}')
@@ -86,7 +95,7 @@ def test_hosts(client):
     assert r.get_json() == [{ 'name': 'node59', 'profiles': [], 'attributes': {} }]
 
 
-    # Delete non existing host
+    # Delete non-existing host
     r = client.delete('/api/v1.0/hosts/aaa')
     assert r.status_code == 404
     assert r.get_json() == {'error': 'Host not found'}
@@ -193,7 +202,7 @@ def test_host_profiles(client):
 
         assert r.status_code == 200
 
-    # Create hosts with non existing profiles
+    # Create hosts with non-existing profiles
     r = client.post('/api/v1.0/hosts',
                     json = { 'name': 'node[0-9]' ,
                              'profiles': ['profileA', 'profileC']}
@@ -216,7 +225,7 @@ def test_host_profiles(client):
         'profiles': ['profileA'],
         'attributes': {'a': '1'}}]
 
-    # Update profiles for non existing host
+    # Update profiles for non-existing host
     r = client.patch('/api/v1.0/hosts/node20',
                     json = {'profiles': ['profileA', 'profileB']})
     assert r.status_code == 404

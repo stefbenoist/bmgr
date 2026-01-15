@@ -171,23 +171,30 @@ def unauthorized(error):
 def conflict(error):
   return make_response(jsonify({'error': 'Conflict'}), 409)
 
-def init_db():
+def init_db(data):
   db.create_all()
 
-  normal_boot = Resource('ipxe_normal_boot', 'file://disk_boot.ipxe.jinja')
-  deploy_boot = Resource('ipxe_deploy_boot', 'file://deploy_boot.ipxe.jinja')
-  boot_alias = Alias('ipxe_boot', normal_boot, None)
-  kickstart = Resource('kickstart', 'file://ks_rhel7.jinja')
-  poap = Resource('poap_config', 'file://poap_config.jinja')
-  db.session.add(normal_boot)
-  db.session.add(deploy_boot)
-  db.session.add(boot_alias)
-  db.session.add(kickstart)
-  db.session.add(poap)
+  if not data:
+    return
+
+  resources = [e for e in data if e.get("type") == "resource"]
+  aliases = [e for e in data if e.get("type") == "alias"]
+
+  # Create firstly resources as aliases depend on them if not exist
+  for res in resources:
+    if get_resource(res.get('name'), True) is None:
+      db.session.add(Resource(res.get('name'), res.get('template_uri')))
+
+  # Create next aliases if not exist
+  for alias in aliases:
+    r = get_resource(alias.get('target'))
+    if get_alias(alias.get('name'), None, True) is None:
+      db.session.add(Alias(alias.get('name'), r, None))
+
   db.session.commit()
 
-
 def get_profile(profile_name):
+  p = None
   try:
     p = db.session.query(Profile).filter_by(name=profile_name).one()
   except NoResultFound:
@@ -195,11 +202,15 @@ def get_profile(profile_name):
 
   return p
 
-def get_resource(resource_name):
+def get_resource(resource_name, allow_fail=False):
+  r = None
   try:
     r = db.session.query(Resource).filter_by(name=resource_name).one()
   except NoResultFound:
-    json_abort(404, "Resource '{}' not found".format(resource_name))
+    if allow_fail:
+      return None
+    else:
+      json_abort(404, "Resource '{}' not found".format(resource_name))
 
   return r
 
@@ -628,4 +639,5 @@ def api_aliases_alias_get(name):
 
 if __name__ == "__main__":
   if sys.argv[1] == 'initdb':
-    init_db()
+    init_data = current_app.config.get("BMGR_INIT_DATA", [])
+    init_db(init_data)

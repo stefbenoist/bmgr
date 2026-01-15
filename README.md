@@ -153,3 +153,19 @@ $ bmgr resource list
 - [Add alias override](docs/aliases.md#add-alias-override): `POST /api/v1.0/aliases/:alias`
 - [Delete global alias](docs/aliases.md#delete-alias): `DELETE /api/v1.0/aliases/:alias`
 - [Delete host-alias](docs/aliases.md#delete-alias-override): `DELETE /api/v1.0/aliases/:alias/:hostname`
+
+## Database initialization
+
+Database initialisation can be customized through the following configuration key with the default value:
+
+```
+BMGR_INIT_DATA = [
+    {"type": "resource", "name": "ipxe_normal_boot", "template_uri": "file://disk_boot.ipxe.jinja"},
+    {"type": "resource", "name": "ipxe_deploy_boot", "template_uri": "file://deploy_boot.ipxe.jinja"},
+    {"type": "resource", "name": "kickstart", "template_uri": "file://ks_rhel7.jinja"},
+    {"type": "resource", "name": "poap_config", "template_uri": "file://poap_config.jinja"},
+    {"type": "alias", "name": "ipxe_boot", "target": "ipxe_normal_boot"}
+]
+```
+
+Both resources and aliases can be set in an idempotent way: So, the **initdb** Flask script can safely be re-applied during upgrades or restarts, as existing resources and aliases are not recreated.

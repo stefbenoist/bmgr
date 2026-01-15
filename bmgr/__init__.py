@@ -1,11 +1,20 @@
-import os
+import os, logging
 
 from flask import Flask
 from . import server
 
+def get_int_param(app, name, default):
+    val = os.environ.get(name)
+    if val is not None:
+        return int(val)
+    return int(app.config.get(name, default))
+
 def create_app(test_config=None):
     # create and configure the app
     app = Flask(__name__, instance_relative_config=True)
+
+    # Logger
+    logger = logging.getLogger(__name__)
 
     # Outside of tests, conf is passed via a file, by default /etc/bmgr/bmgr.conf
     # or the location specified in BMGR_CONF_FILE
@@ -33,8 +42,12 @@ def create_app(test_config=None):
             raise ValueError("Please provide a database host and user/password "
                              "or URI")
 
+    # DB Pool connection config
+    pool_size = get_int_param(app,'BMGR_DB_POOL_SIZE', 20)
+    pool_recycle = get_int_param(app,'BMGR_DB_POOL_RECYCLE', 600)
+
     app.config.setdefault('BMGR_TEMPLATE_PATH', '/etc/bmgr/templates/')
-    app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {'pool_recycle' : 600})
+    app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {'pool_size': pool_size, 'pool_recycle': pool_recycle})
     app.config.setdefault('SQLALCHEMY_TRACK_MODIFICATIONS', False)
     app.register_blueprint(server.bp)
 
@@ -47,8 +60,14 @@ def create_app(test_config=None):
     # Initialize the SQLAlchemy db object
     server.db.init_app(app)
 
+    # Initialize the db and data if present in conf
+    init_data = app.config.get('BMGR_INIT_DATA', [])
+
+    # Log config
+    logger.info(app.config)
+
     @app.cli.command(help='Intialize the bmgr database')
     def initdb():
-        server.init_db()
+        server.init_db(init_data)
 
     return app
