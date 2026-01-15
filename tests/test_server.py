@@ -345,10 +345,12 @@ def test_resources(client):
     r = client.post('/api/v1.0/resources',
                     json = {'name': 'boot',
                     'template_uri': 'file://boot.jinja'})
+    assert r.status_code == 200
 
     r = client.post('/api/v1.0/resources',
                     json = {'name': 'deploy',
                     'template_uri': 'file://deploy.jinja'})
+    assert r.status_code == 200
 
     r = client.get('/api/v1.0/resources/boot/node0')
     assert r.status_code == 200
@@ -398,6 +400,7 @@ def test_resources(client):
     r = client.patch('/api/v1.0/resources/boot',
                     json = {'name': 'boot',
                     'template_uri': 'file://bad.jinja'})
+    assert r.status_code == 200
 
     r = client.get('/api/v1.0/resources/boot/node0')
     assert r.status_code == 400
@@ -434,10 +437,12 @@ def test_aliases(client):
     r = client.post('/api/v1.0/resources',
                     json = {'name': 'boot',
                     'template_uri': 'file://boot.jinja'})
+    assert r.status_code == 200
 
     r = client.post('/api/v1.0/resources',
                     json = {'name': 'deploy',
                     'template_uri': 'file://deploy.jinja'})
+    assert r.status_code == 200
 
     r = client.post('/api/v1.0/aliases',
                     json={'name': 'myalias',
