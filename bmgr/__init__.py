@@ -7,7 +7,7 @@ def create_app(test_config=None):
     # create and configure the app
     app = Flask(__name__, instance_relative_config=True)
 
-    # Outside of tests, conf is passed via a file, by default /etc/bmgr.conf
+    # Outside of tests, conf is passed via a file, by default /etc/bmgr/bmgr.conf
     # or the location specified in BMGR_CONF_FILE
     if test_config is None:
         app.config.from_envvar('BMGR_CONF_FILE', silent=True) or \
@@ -19,7 +19,7 @@ def create_app(test_config=None):
     db_uri = (os.environ.get('BMGR_DB_URI', None) or
               app.config.get('BMGR_DB_URI', None))
 
-    # BUILD the database URI unless explicitely specified
+    # BUILD the database URI unless explicitly specified
     if db_uri:
         app.config['SQLALCHEMY_DATABASE_URI'] = db_uri
     else:

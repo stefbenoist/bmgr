@@ -1,5 +1,5 @@
 from flask import (
-  Flask, Blueprint, jsonify, make_response, abort, request, g, current_app
+  Blueprint, jsonify, make_response, abort, g, current_app
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import joinedload, relationship, synonym, validates
@@ -7,10 +7,9 @@ from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import UniqueConstraint, and_
 from flask_expects_json import expects_json
-from ClusterShell import NodeSet
 from ClusterShell.NodeSet import NodeSet as nodeset
 
-import subprocess, tempfile, os, stat, flask, json, jinja2, sys, itertools, time
+import json, jinja2, sys, itertools
 import re
 
 MAX_NODESET = 100000
@@ -48,7 +47,7 @@ class Profile(db.Model):
       self.weight = weight
 
   def __repr__(self):
-      return '<Profile %r>' % (self.name)
+      return '<Profile %r>' % self.name
 
   def to_dict(self):
     return {'name': self.name,
@@ -88,7 +87,7 @@ class Host(db.Model):
     self.hostname = hostname
 
   def __repr__(self):
-    return '<Host %r>' % (self.hostname)
+    return '<Host %r>' % self.hostname
 
   @property
   def attributes(self):
@@ -129,7 +128,7 @@ class Resource(db.Model):
     self.template_uri = template_uri
 
   def __repr__(self):
-      return '<Resource %r>' % (self.name)
+      return '<Resource %r>' % self.name
 
   def to_dict(self):
     return {'name': self.name,
@@ -158,7 +157,7 @@ class Alias(db.Model):
     self.autodelete = autodelete
 
   def __repr__(self):
-    return '<Alias %r>' % (self.name)
+    return '<Alias %r>' % self.name
 
 @bp.errorhandler(404)
 def not_found(error):
@@ -230,7 +229,7 @@ def delete_profile(name):
   db.session.delete(p)
 
 def query_hosts(host_list=None, check_count=False):
-  hosts = db.session.query(Host).options(joinedload('profiles'))
+  hosts = db.session.query(Host).options(joinedload(Host.profiles))
 
   if host_list is not None:
       hosts = hosts.filter(Host.hostname.in_(host_list))
@@ -266,7 +265,7 @@ def get_hosts_folded(host_list=None):
         'profiles': [p.name for p in sorted(profiles)],
         'attributes': merge_profile_attributes(profiles)})
 
-  return sorted(folded_list, key = lambda g: g['profiles'])
+  return sorted(folded_list, key = lambda x: x['profiles'])
 
 def delete_hosts(host_list):
   db_hosts = query_hosts(host_list, check_count=True)
@@ -291,8 +290,7 @@ def get_host(hostname):
   'required': ['name']
 })
 def api_hosts_post():
-  db_hosts = []
-  t0 = time.time()
+  host_list = []
   try:
     host_list = nodeset(g.data['name'])
     if len(host_list) > MAX_NODESET:
@@ -307,9 +305,8 @@ def api_hosts_post():
         db.session.flush()
 
     db.session.commit()
-  except SQLAlchemyError:
-    # FIXME: Discriminate errors
-    json_abort(409, "Host already exists")
+  except SQLAlchemyError as e:
+    json_abort(409, str(e.__dict__['orig']))
 
   folded_hosts = get_hosts_folded(host_list)
   return jsonify(folded_hosts)
@@ -366,13 +363,13 @@ def api_hosts_hostname_get(hostname):
   'required': ['name']
 })
 def api_profiles_post():
+  profile = None
   try:
     profile = Profile.from_dict(g.data)
     db.session.add(profile)
     db.session.commit()
-  #FIXME: discriminate errors
-  except SQLAlchemyError:
-    json_abort(409, "Profile already exists")
+  except SQLAlchemyError as e:
+    json_abort(409, str(e.__dict__['orig']))
 
   return jsonify(profile.to_dict())
 
@@ -442,13 +439,13 @@ def api_resources_get():
   'required': ['name', 'template_uri']
 })
 def api_resources_post():
+  resource = None
   try:
     resource = Resource.from_dict(g.data)
     db.session.add(resource)
     db.session.commit()
-  #FIXME: discriminate errors
-  except SQLAlchemyError:
-    json_abort(409, "Resource already exists")
+  except SQLAlchemyError as e:
+    json_abort(409, str(e.__dict__['orig']))
 
   return jsonify(resource.to_dict())
 
@@ -519,7 +516,6 @@ def api_resources_resource_render(name, hostname):
   'required': ['name', 'target']
 })
 def api_aliases_post():
-  exists = query_aliases(g.data['name'])
   if query_aliases(g.data['name']).count() > 0:
     json_abort(409, "Alias already exists")
 
@@ -543,10 +539,10 @@ def api_aliases_post():
   'required': ['hosts', 'target']
 })
 def api_aliases_alias_post(name):
-  exists = query_aliases(name)
+  query_aliases(name)
 
   # Check if the main alias is defined
-  main_alias = get_alias(name)
+  get_alias(name)
 
   if query_aliases(name, nodeset(g.data['hosts'])).count() > 0:
     json_abort(409, "Alias or override already exists")

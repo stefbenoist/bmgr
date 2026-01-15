@@ -49,7 +49,7 @@ From the repository root:
 # docker exec -ti bmgr_bmgr_1 /bin/bash
 ```
 
-3. Initialize the datbase
+3. Initialize the database
 ```bash
 # FLASK_APP=bmgr.app flask initdb
 ```

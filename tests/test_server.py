@@ -73,6 +73,7 @@ def test_hosts(client):
                         json = { 'name': hosts }
                         )
         assert r.status_code == 409
+        assert r.get_json() == {'error': 'UNIQUE constraint failed: hosts.hostname'}
 
     # List hosts
     r = client.get('/api/v1.0/hosts')
@@ -135,6 +136,7 @@ def test_profiles(client):
                         json = p)
 
         assert r.status_code == 409
+        assert r.get_json() == {'error': 'UNIQUE constraint failed: profiles.name'}
 
     # List profiles attributes
     for p in profiles:
