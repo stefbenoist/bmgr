@@ -29,7 +29,7 @@ class Profile(db.Model):
   id = db.Column(db.Integer, primary_key=True)
   name = db.Column(db.String(255), unique=True)
   weight = db.Column(db.Integer, default=0)
-  _attributes = db.Column('attributes', db.String(8000))
+  _attributes = db.Column('attributes', db.String())
 
   @property
   def attributes(self):
