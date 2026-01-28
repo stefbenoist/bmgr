@@ -5,7 +5,7 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import joinedload, relationship, synonym, validates
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import UniqueConstraint, and_, event, update
+from sqlalchemy import UniqueConstraint, and_, event, update, select
 from flask_expects_json import expects_json
 from ClusterShell.NodeSet import NodeSet as nodeset
 from jinja2 import Environment, FileSystemLoader
@@ -79,34 +79,22 @@ class CollectionMeta(db.Model):
   name = db.Column(db.String(255), primary_key=True)
   revision = db.Column(db.Integer, nullable=False, default=1)
 
-@event.listens_for(db.session, 'after_flush')
-def bump_collection_revisions(session, flush_context):
+def bump_collection_revisions(session, name):
   """
   Bump revision for all collections impacted by Write operations
   """
-  collections = set()
+  # Apply a lock on defined record
+  session.execute(
+    select(CollectionMeta)
+    .where(CollectionMeta.name == name)
+    .with_for_update()
+  )
 
-  # INSERT / UPDATE operations
-  for obj in session.new.union(session.dirty):
-    name = getattr(obj.__class__, '__collection_name__', None)
-    if name:
-      collections.add(name)
-
-  # DELETE operations
-  for obj in session.deleted:
-    name = getattr(obj.__class__, '__collection_name__', None)
-    if name:
-      collections.add(name)
-
-  if not collections:
-    return
-
-  for name in collections:
-    session.execute(
-        update(CollectionMeta)
-        .where(CollectionMeta.name == name)
-        .values(revision=CollectionMeta.revision + 1)
-    )
+  session.execute(
+    update(CollectionMeta)
+    .where(CollectionMeta.name == name)
+    .values(revision=CollectionMeta.revision + 1)
+  )
 
 class Profile(db.Model):
   __tablename__ = 'profiles'
@@ -417,6 +405,7 @@ def api_hosts_post():
       if i%1000 == 0:
         db.session.flush()
 
+    bump_collection_revisions(db.session, "hosts")
     db.session.commit()
   except SQLAlchemyError as e:
     json_abort(409, str(e.__dict__['orig']))
@@ -443,6 +432,7 @@ def api_hosts_get():
 @bp.route('/api/v1.0/hosts/<string:hostname>', methods=['DELETE'])
 def api_hosts_hostname_delete(hostname):
   delete_hosts(nodeset(hostname))
+  bump_collection_revisions(db.session, "hosts")
   db.session.commit()
   return make_response(jsonify([]), 204)
 
@@ -469,6 +459,7 @@ def api_hosts_hostname_patch(hostname):
     need_commit = True
 
   if need_commit:
+    bump_collection_revisions(db.session, "hosts")
     db.session.commit()
 
   return jsonify(get_hosts_folded(nodelist))
@@ -492,6 +483,7 @@ def api_profiles_post():
   try:
     profile = Profile.from_dict(g.data)
     db.session.add(profile)
+    bump_collection_revisions(db.session, "profiles")
     db.session.commit()
   except SQLAlchemyError as e:
     json_abort(409, str(e.__dict__['orig']))
@@ -523,6 +515,7 @@ def api_profiles_get():
 @bp.route('/api/v1.0/profiles/<string:name>', methods=['DELETE'])
 def api_profiles_profile_delete(name):
   delete_profile(name)
+  bump_collection_revisions(db.session, "profiles")
   db.session.commit()
   return make_response(jsonify({}), 204)
 
@@ -553,6 +546,7 @@ def api_profiles_profile_patch(name):
     need_commit = True
 
   if need_commit:
+    bump_collection_revisions(db.session, "profiles")
     db.session.commit()
 
   return make_response(jsonify(profile.to_dict()), 200)
