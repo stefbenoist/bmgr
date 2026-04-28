@@ -1,5 +1,3 @@
-import logging
-
 from flask import (
   Blueprint, jsonify, make_response, abort, g, current_app, request
 )
@@ -13,8 +11,6 @@ from ClusterShell.NodeSet import NodeSet as nodeset
 from jinja2 import Environment, FileSystemLoader
 
 import json, jinja2, sys, itertools, pathlib, re, importlib
-
-logger = logging.getLogger(__name__)
 
 MAX_NODESET = 100000
 
@@ -77,7 +73,6 @@ def create_jinja_env(template_path, jinja_customs_path, enable_recursive_renderi
 def load_templates():
     for t in jinja_env.list_templates():
       jinja_env.get_template(t)
-    logger.info("templates loaded:%d", len(jinja_env.cache))
 
 class CollectionMeta(db.Model):
   """

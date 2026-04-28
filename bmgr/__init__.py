@@ -19,7 +19,6 @@ def create_app(test_config=None):
     # create and configure the app
     app = Flask(__name__, instance_relative_config=True)
 
-    # Outside of tests, conf is passed via a file, by default /etc/bmgr/bmgr.conf
     # Logger
     logger = logging.getLogger(__name__)
 
@@ -62,8 +61,8 @@ def create_app(test_config=None):
 
     recursive_rendering = get_bool_param(app,'BMGR_ENABLE_RECURSIVE_RENDERING', True)
     app.config.setdefault('BMGR_TEMPLATE_PATH', '/etc/bmgr/templates/')
-    app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {'pool_size': pool_size, 'pool_recycle': pool_recycle})
     app.config.setdefault('BMGR_JINJA_CUSTOMS_PACKAGE_PATH', 'customs')
+    app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {'pool_size': pool_size, 'pool_recycle': pool_recycle})
     app.config.setdefault('SQLALCHEMY_TRACK_MODIFICATIONS', False)
     app.register_blueprint(server.bp)
 
@@ -76,12 +75,6 @@ def create_app(test_config=None):
     # Initialize the SQLAlchemy db object
     server.db.init_app(app)
 
-    # Initialize the db and data if present in conf
-    init_data = app.config.get('BMGR_INIT_DATA', [])
-
-    # Log config
-    logger.info(app.config)
-
     # Initialize the jinja2 env
     server.create_jinja_env(app.config.get('BMGR_TEMPLATE_PATH'),
                             app.config.get('BMGR_JINJA_CUSTOMS_PACKAGE_PATH'),
@@ -90,7 +83,7 @@ def create_app(test_config=None):
     # Initialize the db and data if present in conf
     init_data = app.config.get('BMGR_INIT_DATA', [])
 
-    # Load templates
+    # Load templates in cache
     server.load_templates()
 
     # Log config
