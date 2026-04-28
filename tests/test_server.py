@@ -131,6 +131,38 @@ def test_hosts(client):
     r = client.get('/api/v1.0/hosts')
     assert r.status_code == 200
     assert r.get_json() == [{ 'name': str(hosts_ns), 'profiles': [], 'attributes': {} }]
+    assert 'ETag' in r.headers
+
+    # Check Etag
+    etag = r.headers["ETag"]
+    assert etag.startswith('W/"hosts:rev')
+    r = client.get('/api/v1.0/hosts', headers={"If-None-Match": etag})
+    assert r.status_code == 304
+    assert r.get_json() is None
+
+    # Add host
+    r = client.post('/api/v1.0/hosts',
+                    json={'name': 'login1'}
+                    )
+    assert r.status_code == 200
+    assert r.get_json() == [{'name': 'login1', 'profiles': [], 'attributes': {}}]
+
+    hosts_groups_and_login1 = hosts_groups+',login1'
+    hosts_ns_with_login1 = nodeset(hosts_groups_and_login1)
+
+    # List hosts again
+    r = client.get('/api/v1.0/hosts')
+    assert r.status_code == 200
+    assert r.get_json() == [{ 'name': str(hosts_ns_with_login1), 'profiles': [], 'attributes': {} }]
+    assert 'ETag' in r.headers
+
+    # Check Etag changed
+    etag = r.headers["ETag"]
+    assert etag.startswith('W/"hosts:rev')
+    r = client.get('/api/v1.0/hosts', headers={"If-None-Match": etag})
+    assert r.status_code == 304
+    assert r.get_json() is None
+
 
     # Get host
     r = client.get('/api/v1.0/hosts/node59')
@@ -145,7 +177,7 @@ def test_hosts(client):
 
 
     # Delete our hosts
-    for host in str(hosts_ns).split(','):
+    for host in str(hosts_ns_with_login1).split(','):
         r = client.delete('/api/v1.0/hosts/{}'.format(host))
         assert r.status_code == 204
 
@@ -217,6 +249,16 @@ def test_profiles(client):
         expect = p
         expect.setdefault("weight", 0)
         assert r.get_json() == p
+
+    # Check Etag
+    r = client.get('/api/v1.0/profiles')
+    assert r.status_code == 200
+    etag = r.headers["ETag"]
+    assert etag.startswith('W/"profiles:rev')
+
+    r = client.get('/api/v1.0/profiles', headers={"If-None-Match": etag})
+    assert r.status_code == 304
+    assert r.get_json() is None
 
     # Delete profiles
     for p in new_profiles:

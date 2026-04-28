@@ -1,16 +1,20 @@
+import logging
+
 from flask import (
-  Blueprint, jsonify, make_response, abort, g, current_app
+  Blueprint, jsonify, make_response, abort, g, current_app, request
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import joinedload, relationship, synonym, validates
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import UniqueConstraint, and_
+from sqlalchemy import UniqueConstraint, and_, update, select
 from flask_expects_json import expects_json
 from ClusterShell.NodeSet import NodeSet as nodeset
 from jinja2 import Environment, FileSystemLoader
 
 import json, jinja2, sys, itertools, pathlib, re, importlib
+
+logger = logging.getLogger(__name__)
 
 MAX_NODESET = 100000
 
@@ -70,8 +74,40 @@ def create_jinja_env(template_path, jinja_customs_path, enable_recursive_renderi
 
   jinja_env.enable_recursive_rendering = enable_recursive_rendering
 
+def load_templates():
+    for t in jinja_env.list_templates():
+      jinja_env.get_template(t)
+    logger.info("templates loaded:%d", len(jinja_env.cache))
+
+class CollectionMeta(db.Model):
+  """
+  Class used for incrementing revision for Etag handling
+  """
+  __tablename__ = "collections_meta"
+
+  name = db.Column(db.String(255), primary_key=True)
+  revision = db.Column(db.Integer, nullable=False, default=1)
+
+def bump_collection_revisions(session, name):
+  """
+  Bump revision for all collections impacted by Write operations
+  """
+  # Apply a lock on defined record
+  session.execute(
+    select(CollectionMeta)
+    .where(CollectionMeta.name == name)
+    .with_for_update()
+  )
+
+  session.execute(
+    update(CollectionMeta)
+    .where(CollectionMeta.name == name)
+    .values(revision=CollectionMeta.revision + 1)
+  )
+
 class Profile(db.Model):
   __tablename__ = 'profiles'
+  __collection_name__ = 'profiles'
   id = db.Column(db.Integer, primary_key=True)
   name = db.Column(db.String(255), unique=True)
   weight = db.Column(db.Integer, default=0)
@@ -123,6 +159,7 @@ def parse_template_uri(uri):
 
 class Host(db.Model):
   __tablename__ = 'hosts'
+  __collection_name__ = 'hosts'
   id = db.Column(db.Integer, primary_key=True)
   hostname = db.Column(db.String(255), unique=True)
 
@@ -222,6 +259,11 @@ def conflict(error):
 def init_db(data):
   db.create_all()
 
+  # Init revisions values
+  for name in ['hosts', 'profiles']:
+    if not db.session.query(CollectionMeta).filter_by(name=name).first():
+      db.session.add(CollectionMeta(name=name, revision=1))
+
   if not data:
     return
 
@@ -264,7 +306,7 @@ def get_resource(resource_name, allow_fail=False):
 
 def get_alias(alias_name, hostname=None, allow_fail=False):
   try:
-    a= db.session.query(Alias)
+    a = db.session.query(Alias)
     if hostname:
       return a.join(Host).filter(and_(Alias.name==alias_name,
                                       Host.hostname==hostname)).one()
@@ -372,6 +414,7 @@ def api_hosts_post():
       if i%1000 == 0:
         db.session.flush()
 
+    bump_collection_revisions(db.session, "hosts")
     db.session.commit()
   except SQLAlchemyError as e:
     json_abort(409, str(e.__dict__['orig']))
@@ -381,11 +424,24 @@ def api_hosts_post():
 
 @bp.route('/api/v1.0/hosts', methods=['GET'])
 def api_hosts_get():
-  return jsonify(get_hosts_folded())
+  # Get revision
+  meta = db.session.get(CollectionMeta, 'hosts')
+  etag = f"hosts:rev{meta.revision}"
+
+  # return Status Not Modified (304) if Entity tag matches
+  if request.if_none_match.contains_weak(etag):
+    return "", 304
+
+  response = make_response(jsonify(get_hosts_folded()))
+  response.headers["ETag"] = f'W/"{etag}"'
+  response.headers["Cache-Control"] = "private, must-revalidate"
+
+  return response
 
 @bp.route('/api/v1.0/hosts/<string:hostname>', methods=['DELETE'])
 def api_hosts_hostname_delete(hostname):
   delete_hosts(nodeset(hostname))
+  bump_collection_revisions(db.session, "hosts")
   db.session.commit()
   return make_response(jsonify([]), 204)
 
@@ -412,6 +468,7 @@ def api_hosts_hostname_patch(hostname):
     need_commit = True
 
   if need_commit:
+    bump_collection_revisions(db.session, "hosts")
     db.session.commit()
 
   return jsonify(get_hosts_folded(nodelist))
@@ -435,6 +492,7 @@ def api_profiles_post():
   try:
     profile = Profile.from_dict(g.data)
     db.session.add(profile)
+    bump_collection_revisions(db.session, "profiles")
     db.session.commit()
   except SQLAlchemyError as e:
     json_abort(409, str(e.__dict__['orig']))
@@ -443,17 +501,30 @@ def api_profiles_post():
 
 @bp.route('/api/v1.0/profiles', methods=['GET'])
 def api_profiles_get():
+  # Get revision
+  meta = db.session.get(CollectionMeta, 'profiles')
+  etag = f"profiles:rev{meta.revision}"
+
+  # return Status Not Modified (304) if Entity tag matches
+  if request.if_none_match.contains_weak(etag):
+    return "", 304
+
   profiles = db.session.query(Profile).all()
   r = []
   for p in profiles:
     r.append(p.to_dict())
 
-  return jsonify(r)
+  response = make_response(jsonify(r))
+  response.headers["ETag"] = f'W/"{etag}"'
+  response.headers["Cache-Control"] = "private, must-revalidate"
+
+  return response
 
 
 @bp.route('/api/v1.0/profiles/<string:name>', methods=['DELETE'])
 def api_profiles_profile_delete(name):
   delete_profile(name)
+  bump_collection_revisions(db.session, "profiles")
   db.session.commit()
   return make_response(jsonify({}), 204)
 
@@ -484,6 +555,7 @@ def api_profiles_profile_patch(name):
     need_commit = True
 
   if need_commit:
+    bump_collection_revisions(db.session, "profiles")
     db.session.commit()
 
   return make_response(jsonify(profile.to_dict()), 200)
