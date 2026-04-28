@@ -169,3 +169,98 @@ BMGR_INIT_DATA = [
 ```
 
 Both resources and aliases can be set in an idempotent way: So, the **initdb** Flask script can safely be re-applied during upgrades or restarts, as existing resources and aliases are not recreated.
+
+## BMGR Custom Jinja Filters and Globals
+
+bmgr allows extending in a generic and non-intrusive way the Jinja2 rendering environment with custom filters and global functions.
+
+Custom Jinja extensions are enabled through the following configuration key with the default value:
+```
+BMGR_JINJA_CUSTOMS_PACKAGE_PATH="bmgr/customs"
+```
+The path must be a Python package (i.e. contain an __init__.py file).
+
+At startup, BMGR will import the modules filters.py and globals.py from this package if they exist.
+
+The module filters.py defines a dictionary named FILTERS.
+
+The module globals.py defines a dictionary named GLOBALS.
+
+### Default Custom Filters
+
+```python
+FILTERS = {
+    "from_json": json.loads,
+    "from_yaml": yaml.safe_load,
+    "regex_replace": regex_replace,
+}
+```
+
+#### Usage in templates
+
+```
+{%- set data = '{"foo": 123}' | from_json -%}
+{{- data.foo -}}
+
+{%- set config = "foo: 123\nbar: 456" | from_yaml -%}
+{{- config.bar -}}
+
+{%- set text = "Hello 123" -%}
+{{- text | regex_replace("\d+", "world") -}}
+```
+
+### Default Custom Globals
+
+Global functions may use the Jinja context via @pass_context.
+
+```python
+GLOBALS = {
+    "__boot_context__": boot_context,
+}
+```
+
+#### Usage in templates
+
+__boot__context() allows returning a dictionary of sorted context keys used for introspection.
+
+```
+{%- for key, value in __boot_context__().items() if key.startswith('boot_') and value.strip() | length > 0 -%}
+{{- value.strip() -}}
+{%- endfor -%}
+```
+
+## BMGR Recursive Rendering
+
+Template Recursive Rendering is enabled through the following configuration key with the default value:
+
+```
+BMGR_ENABLE_RECURSIVE_RENDERING=True
+```
+
+Recursive rendering makes it possible for a context key to reference another key, which may itself reference a third one.
+
+To prevent infinite loops and keep rendering predictable, this resolution is limited to a maximum depth of 3 iterations.
+
+### Example
+
+A profile is defined with the following attributes: {"pseudo": "{{ name }}", "name": "john"}
+
+```
+Hello {{ pseudo }}
+```
+
+## Database initialization
+
+Database initialisation can be customized through the following configuration key with the default value:
+
+```
+BMGR_INIT_DATA = [
+    {"type": "resource", "name": "ipxe_normal_boot", "template_uri": "file://disk_boot.ipxe.jinja"},
+    {"type": "resource", "name": "ipxe_deploy_boot", "template_uri": "file://deploy_boot.ipxe.jinja"},
+    {"type": "resource", "name": "kickstart", "template_uri": "file://ks_rhel7.jinja"},
+    {"type": "resource", "name": "poap_config", "template_uri": "file://poap_config.jinja"},
+    {"type": "alias", "name": "ipxe_boot", "target": "ipxe_normal_boot"}
+]
+```
+
+Both resources and aliases can be set in an idempotent way: So, the **initdb** Flask script can safely be re-applied during upgrades or restarts, as existing resources and aliases are not recreated.

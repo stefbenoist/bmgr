@@ -8,9 +8,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import UniqueConstraint, and_
 from flask_expects_json import expects_json
 from ClusterShell.NodeSet import NodeSet as nodeset
+from jinja2 import Environment, FileSystemLoader
 
 import json, jinja2, sys, itertools
 import re
+import json, jinja2, sys, itertools, pathlib, re, importlib
 
 MAX_NODESET = 100000
 
@@ -23,6 +25,52 @@ host_profiles_table = db.Table('host_profiles',
                                db.Column('profile_id', db.Integer,
                                          db.ForeignKey('profiles.id'))
                                )
+
+# Declare jinja_env as Global in order to gain performances (also take benefit of default jinja2 memory cache)
+jinja_env: Environment
+
+def load_jinja_customs(path):
+  """
+  Load jinja2 customs filters anf globals from directory path
+  """
+  filters = {}
+  globals_ = {}
+
+  base = pathlib.Path(path)
+  if not base.exists():
+    return filters, globals_
+
+  for file in base.rglob("*.py"):
+    if file.name.startswith("_"):
+      continue
+
+    module_name = f"bmgr_jinja_ext_{file.relative_to(base).with_suffix('').as_posix().replace('/', '_')}"
+    spec = importlib.util.spec_from_file_location(module_name, file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    if hasattr(module, "FILTERS"):
+      filters.update(module.FILTERS)
+
+    if hasattr(module, "GLOBALS"):
+      globals_.update(module.GLOBALS)
+
+  return filters, globals_
+
+def create_jinja_env(template_path, jinja_customs_path, enable_recursive_rendering=False):
+  """Create jinja Env"""
+  global jinja_env
+
+  jinja_env = Environment(
+    loader=FileSystemLoader(template_path)
+  )
+
+  # Load jinja2 customs filters and globals
+  filters, globals_ = load_jinja_customs(jinja_customs_path)
+  jinja_env.filters.update(filters)
+  jinja_env.globals.update(globals_)
+
+  jinja_env.enable_recursive_rendering = enable_recursive_rendering
 
 class Profile(db.Model):
   __tablename__ = 'profiles'
@@ -41,7 +89,9 @@ class Profile(db.Model):
 
   attributes = synonym('_attributes', descriptor=attributes)
 
-  def __init__(self, name, attributes={}, weight=0):
+  def __init__(self, name, attributes=None, weight=0):
+      if attributes is None:
+          attributes = {}
       self.name = name
       self._attributes = json.dumps(attributes)
       self.weight = weight
@@ -231,9 +281,18 @@ def get_alias(alias_name, hostname=None, allow_fail=False):
 
 def render(tpl, context):
   path = parse_template_uri(tpl)
-  return jinja2.Environment(loader = jinja2.FileSystemLoader(
-      current_app.config['BMGR_TEMPLATE_PATH'])).get_template(path).render(
-    context)
+
+  if jinja_env.enable_recursive_rendering:
+    # Maximum recursive depth
+    max_depth = 3
+    prev = jinja_env.get_template(path).render(context)
+    for depth in range(max_depth):
+      curr = jinja_env.from_string(prev).render(context)
+      if curr == prev:
+        return curr
+      prev = curr
+
+  return jinja_env.get_template(path).render(context)
 
 def delete_profile(name):
   p = get_profile(name)
