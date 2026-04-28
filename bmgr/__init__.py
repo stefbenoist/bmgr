@@ -19,9 +19,6 @@ def create_app(test_config=None):
     # create and configure the app
     app = Flask(__name__, instance_relative_config=True)
 
-    # Logger
-    logger = logging.getLogger(__name__)
-
     # Outside of tests, conf is passed via a file, by default /etc/bmgr/bmgr.conf
     # Logger
     logger = logging.getLogger(__name__)
