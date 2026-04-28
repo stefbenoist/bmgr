@@ -10,8 +10,6 @@ from flask_expects_json import expects_json
 from ClusterShell.NodeSet import NodeSet as nodeset
 from jinja2 import Environment, FileSystemLoader
 
-import json, jinja2, sys, itertools
-import re
 import json, jinja2, sys, itertools, pathlib, re, importlib
 
 MAX_NODESET = 100000
