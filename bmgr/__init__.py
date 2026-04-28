@@ -83,6 +83,9 @@ def create_app(test_config=None):
     # Initialize the db and data if present in conf
     init_data = app.config.get('BMGR_INIT_DATA', [])
 
+    # Load templates
+    server.load_templates()
+
     # Log config
     logger.info(app.config)
 

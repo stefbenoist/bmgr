@@ -1,3 +1,5 @@
+import logging
+
 from flask import (
   Blueprint, jsonify, make_response, abort, g, current_app, request
 )
@@ -5,12 +7,14 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import joinedload, relationship, synonym, validates
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import UniqueConstraint, and_, event, update, select
+from sqlalchemy import UniqueConstraint, and_, update, select
 from flask_expects_json import expects_json
 from ClusterShell.NodeSet import NodeSet as nodeset
 from jinja2 import Environment, FileSystemLoader
 
 import json, jinja2, sys, itertools, pathlib, re, importlib
+
+logger = logging.getLogger(__name__)
 
 MAX_NODESET = 100000
 
@@ -69,6 +73,11 @@ def create_jinja_env(template_path, jinja_customs_path, enable_recursive_renderi
   jinja_env.globals.update(globals_)
 
   jinja_env.enable_recursive_rendering = enable_recursive_rendering
+
+def load_templates():
+    for t in jinja_env.list_templates():
+      jinja_env.get_template(t)
+    logger.info("templates loaded:%d", len(jinja_env.cache))
 
 class CollectionMeta(db.Model):
   """
