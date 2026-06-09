@@ -686,6 +686,28 @@ def test_aliases(client):
     assert r.status_code == 200
     assert r.get_data(as_text=True) == expect_deploy
 
+    # Update existing alias override
+    r = client.post('/api/v1.0/aliases/myalias',
+                    json={'target': 'boot',
+                          'hosts': 'node2',
+                          'autodelete': False})
+    assert r.status_code == 200
+    r = client.get('/api/v1.0/aliases/myalias')
+    assert r.status_code == 200
+    assert r.get_json()['overrides']['node2']['target'] == 'boot'
+    assert r.get_json()['overrides']['node2']['autodelete'] == False
+
+    # Check idempotency on update existing alias override
+    r = client.post('/api/v1.0/aliases/myalias',
+                    json={'target': 'boot',
+                          'hosts': 'node2',
+                          'autodelete': False})
+    assert r.status_code == 200
+    r = client.get('/api/v1.0/aliases/myalias')
+    assert r.status_code == 200
+    assert r.get_json()['overrides']['node2']['target'] == 'boot'
+    assert r.get_json()['overrides']['node2']['autodelete'] == False
+
     # Delete overrides and aliases
     r = client.delete('/api/v1.0/aliases/myalias/node[2-3]')
     assert r.status_code == 204

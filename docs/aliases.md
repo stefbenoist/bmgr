@@ -135,9 +135,9 @@ Used to add hosts.
 
 **Content** : `Alias already exists`
 
-# Add alias override
+# Add or update alias override in an idempotency way
 
-Used to add hosts.
+Used to add alias override.
 
 **URL** : `/api/v1.0/aliases/:alias`
 
@@ -172,11 +172,3 @@ Used to add hosts.
 ```json
 {}
 ```
-
-## Error Response
-
-**Condition** : If 'alias' already exists
-
-**Code** : `409 CONFLICT`
-
-**Content** : `Alias or override already exists`

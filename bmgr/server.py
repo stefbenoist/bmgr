@@ -674,29 +674,32 @@ def api_aliases_post():
   'required': ['hosts', 'target']
 })
 def api_aliases_alias_post(name):
-  query_aliases(name)
+    # Check the alias exists
+    get_alias(name)
 
-  # Check if the main alias is defined
-  get_alias(name)
+    target = get_resource(g.data['target'])
+    autodelete = g.data.get('autodelete', False)
 
-  if query_aliases(name, nodeset(g.data['hosts'])).count() > 0:
-    json_abort(409, "Alias or override already exists")
-
-  target = get_resource(g.data['target'])
-  for i,host in enumerate(query_hosts(nodeset(g.data['hosts']),
+    for i,host in enumerate(query_hosts(nodeset(g.data['hosts']),
                                       check_count=True).all()):
-    a = Alias(name,
-              target,
-              host,
-              g.data.get('autodelete', False))
+        # Create ou update the alias override if necessary
+        alias = get_alias(name, host.hostname, allow_fail=True)
 
-    db.session.add(a)
-    if i%1000 == 0:
-      db.session.flush()
+        if alias is None:
+            alias = Alias(name, target, host, autodelete)
+            db.session.add(alias)
+        else:
+            if alias.target == target and alias.autodelete == autodelete:
+                continue
 
-  db.session.commit()
+            alias.target = target
+            alias.autodelete = autodelete
 
-  return jsonify({})
+        if i%1000 == 0:
+            db.session.flush()
+
+    db.session.commit()
+    return jsonify({})
 
 @bp.route('/api/v1.0/aliases/<string:name>', methods=['DELETE'])
 def api_aliases_alias_delete(name):
