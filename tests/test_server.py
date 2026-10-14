@@ -188,6 +188,43 @@ def test_hosts(client):
 
     assert_empty_hosts(client)
 
+def test_hosts_bulk_delete(client):
+    # Create a profile and a host set referencing it
+    r = client.post('/api/v1.0/profiles',
+                    json={'name': 'profileA', 'attributes': {'a': '1'}})
+    assert r.status_code == 200
+
+    r = client.post('/api/v1.0/hosts',
+                    json={'name': 'node[0-99]', 'profiles': ['profileA']})
+    assert r.status_code == 200
+
+    # Create an alias with overrides linked to some hosts
+    client.post('/api/v1.0/resources',
+                json={'name': 'boot', 'template_uri': 'file://boot.jinja'})
+    r = client.post('/api/v1.0/aliases',
+                    json={'name': 'myalias', 'target': 'boot'})
+    assert r.status_code == 200
+    r = client.post('/api/v1.0/aliases/myalias',
+                    json={'target': 'boot', 'hosts': 'node[0-9]', 'autodelete': True})
+    assert r.status_code == 200
+
+    # Delete the whole nodeset in a single request
+    r = client.delete('/api/v1.0/hosts/node[0-99]')
+    assert r.status_code == 204
+
+    assert_empty_hosts(client)
+
+    # Profile untouched
+    r = client.get('/api/v1.0/profiles/profileA')
+    assert r.status_code == 200
+
+    # Alias overrides linked to the deleted hosts are gone
+    r = client.get('/api/v1.0/aliases/myalias')
+    assert r.status_code == 200
+    assert r.get_json() == {'name': 'myalias',
+                            'target': 'boot',
+                            'overrides': {}}
+
 def test_profiles(client):
     assert_empty_profiles(client)
 

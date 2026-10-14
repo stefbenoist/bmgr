@@ -260,6 +260,9 @@ def init_db(data):
       db.session.add(CollectionMeta(name=name, revision=1))
 
   if not data:
+    # Commit meta rows even with no seed data, otherwise they are rolled back
+    # on session teardown and /profiles|/hosts return 500.
+    db.session.commit()
     return
 
   resources = [e for e in data if e.get("type") == "resource"]
@@ -373,10 +376,24 @@ def get_hosts_folded(host_list=None):
   return sorted(folded_list, key = lambda x: x['profiles'])
 
 def delete_hosts(host_list):
-  db_hosts = query_hosts(host_list, check_count=True)
+  host_ids = [row[0] for row in
+              db.session.query(Host.id).filter(Host.hostname.in_(host_list))]
 
-  for dbh in db_hosts:
-    db.session.delete(dbh)
+  if len(host_ids) != len(host_list):
+    json_abort(404, "Host not found")
+
+  # Bulk deletes bypass ORM cascades, so dependents are removed explicitly
+  # first. Deleting the Host objects one by one triggers a lazy-load plus one
+  # DELETE per host, which times out on large nodesets.
+  db.session.query(Alias).filter(Alias.host_id.in_(host_ids)).\
+    delete(synchronize_session=False)
+
+  db.session.execute(
+    host_profiles_table.delete().where(host_profiles_table.c.host_id.in_(host_ids))
+  )
+
+  db.session.query(Host).filter(Host.id.in_(host_ids)).\
+    delete(synchronize_session=False)
 
 def get_host(hostname):
   """ Returns a single Host """
